@@ -55,6 +55,10 @@ namespace DotNetOutdated
             ShortName="td", LongName = "transitive-depth")]
         public int TransitiveDepth { get; set; } = 1;
 
+        [Option(CommandOptionType.NoValue, Description = "Specifies whether only outdated packages should be shown.",
+            ShortName="o", LongName = "show-only-outdated")]
+        public bool ShowOnlyOutdated { get; set; }
+
         public static int Main(string[] args)
         {
             using (var services = new ServiceCollection()
@@ -133,9 +137,16 @@ namespace DotNetOutdated
                         
                         if (dependencies.Count > 0)
                         {
+                            bool hasOutdatedDependency = false;
                             foreach (var dependency in dependencies)
                             {
-                                await ReportDependency(console, dependency, dependency.VersionRange, project.Sources, indentLevel, targetFramework, project.FilePath);
+                                hasOutdatedDependency |= await ReportDependency(console, dependency, dependency.VersionRange, project.Sources, indentLevel, targetFramework, project.FilePath);
+                            }
+
+                            if (ShowOnlyOutdated && !hasOutdatedDependency)
+                            {
+                                console.WriteIndent(indentLevel);
+                                console.WriteLine("-- Everything up-to-date --");
                             }
                         }
                         else
@@ -171,7 +182,7 @@ namespace DotNetOutdated
             console.WriteLine();
         }
 
-        private async Task ReportDependency(IConsole console, Project.Dependency dependency, VersionRange versionRange, List<Uri> sources, int indentLevel,
+        private async Task<bool> ReportDependency(IConsole console, Project.Dependency dependency, VersionRange versionRange, List<Uri> sources, int indentLevel,
             Project.TargetFramework targetFramework, string projectFilePath)
         {
             console.WriteIndent(indentLevel);
@@ -180,9 +191,13 @@ namespace DotNetOutdated
             if (dependency.AutoReferenced)
                 console.Write(" [A]");
 
+            bool isOutdated = false;
+            bool hasError = false;
+
             var referencedVersion = dependency.ResolvedVersion;
             if (referencedVersion == null)
             {
+                hasError = true;
                 console.Write(" ");
                 console.Write("Cannot resolve referenced version", ConsoleColor.White, ConsoleColor.DarkRed);
                 console.WriteLine();
@@ -201,23 +216,36 @@ namespace DotNetOutdated
                 }
                 else
                 {
+                    hasError = true;
                     console.Write($"{referencedVersion} ", ConsoleColor.Yellow); 
                     console.Write("Cannot resolve latest version", ConsoleColor.White, ConsoleColor.DarkCyan);
                 }
 
                 if (latestVersion > referencedVersion)
                 {
+                    isOutdated = true;
                     console.Write(" (");
                     console.Write(latestVersion, ConsoleColor.Blue);
                     console.Write(")");
                 }
                 console.WriteLine();
             }
-                        
+
+            bool hasOutdatedDependency = false;
             foreach (var childDependency in dependency.Dependencies)
             {
-                await ReportDependency(console, childDependency, childDependency.VersionRange, sources, indentLevel + 1, targetFramework, projectFilePath);
-            }            
+                hasOutdatedDependency |= await ReportDependency(console, childDependency, childDependency.VersionRange, sources, indentLevel + 1, targetFramework, projectFilePath);
+            }
+
+            bool result = isOutdated || hasOutdatedDependency || hasError;
+            if (ShowOnlyOutdated && !result)
+            {
+                // Undo the previous WriteLine and delete previous line
+                Console.SetCursorPosition(0, Console.CursorTop - 1);
+                ClearCurrentConsoleLine();
+            }
+
+            return result;
         }
         
         public static void ClearCurrentConsoleLine()
